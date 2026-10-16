@@ -1,93 +1,380 @@
-# Water segmentation: model, REST API and web UI
+# 🌊 Water Segmentation from Multispectral Satellite Imagery
 
-Segments water in 12-band multispectral satellite tiles (128x128 px in the training data).
-A tile goes in, a binary mask (0 = land, 255 = water) comes out, through a Python script, a Flask REST API
-or a small web page.
+A deep-learning project for detecting water bodies in multispectral satellite imagery using a **17-channel U-Net**. The project includes a model inference pipeline, a Flask REST API, and an interactive web interface for visualizing predicted water masks.
 
-> **Weights in this repo.** `models/water_unet17.pt` is a *demo* checkpoint trained on synthetic tiles so the
-> code runs out of the box. Replace it with the real model before submitting:
-> `python train_export.py --data-dir <data> --cv-iou <x> --cv-f1 <y>` (see "Export the real model").
-> If you only want to try the app first, create the demo checkpoint with
-> `python tools/make_synthetic_data.py --out synthetic_data && python train_export.py --data-dir synthetic_data --epochs 4 --steps 12 --name "DEMO unet-17ch (synthetic data)" --trained-on "SYNTHETIC tiles - plumbing test only"` (about 1 minute on CPU; needs `scipy`).
-> Then delete `samples/synthetic_*` and re-run `python test_api.py`.
+Upload a 12-band satellite tile, run water segmentation, and compare the predicted water mask with the original true-colour image.
 
-## Which model is deployed
+> **Model status:** The repository's checkpoint may be a synthetic-data demo model. Synthetic data are useful for testing the application pipeline, but they do not establish real-world water-detection accuracy. See [Model Performance and Limitations](#-model-performance-and-limitations) before interpreting predictions.
 
-Selected by out-of-fold (5-fold CV) water IoU from the Week 1-2 comparison:
+---
 
-| Model | Channels | IoU | F1 |
-|---|---|---|---|
-| **U-Net from scratch + water indices (deployed)** | 17 | **0.7102** | **0.8306** |
-| UNet-ResNet34, random init | 17 | 0.7037 | 0.8261 |
-| UNet-EffNetB0 pretrained | 17 | 0.7012 | 0.8244 |
-| UNet-ResNet34 pretrained | 12 | 0.7007 | 0.8240 |
-| UNet-ResNet34 pretrained | 17 | 0.7005 | 0.8238 |
-| U-Net from scratch (baseline) | 12 | 0.6848 | 0.8130 |
-| UNet-EffNetB0 pretrained | 12 | 0.6590 | 0.7945 |
+## ✨ Features
 
-These numbers were produced with the old first-layer initialisation for the pretrained models. The fixed notebook
-(`docs/Water_Segmentation_Week2_fixed.ipynb`, section 10) re-runs them and picks the deployment model again.
-Input = 12 bands + NDWI, MNDWI, NDVI, AWEInsh, AWEIsh, normalised with dataset-wise per-channel statistics that are
-stored inside the checkpoint.
+- **Multispectral input:** Supports 12-band GeoTIFF satellite tiles and NumPy arrays.
+- **Spectral feature engineering:** Adds five water- and vegetation-related indices to the original 12 bands.
+- **Deep-learning segmentation:** Uses a U-Net architecture to classify pixels as water or non-water.
+- **Interactive web interface:** Upload tiles and visualize segmentation results.
+- **REST API:** Run predictions programmatically through Flask.
+- **Prediction visualization:** Generate binary masks, true-colour previews, overlays, and probability maps.
+- **Test-time augmentation:** Optionally averages predictions from eight rotations and flips.
+- **Automated testing:** Includes API checks, edge cases, and optional evaluation against reference masks.
 
-## First-conv fix (Week 2 feedback)
+## 🛰️ How It Works
 
-`adapt_first_conv(strategy="mean")` repeated one averaged RGB filter on every band, so all bands started identical.
-`water_seg/models.py` now provides `rgb_random` (default: pretrained filters on R/G/B, independent random filters on
-the other bands), `random`, `adapter` (a learnable 1x1 conv N -> 3 in front of an unmodified pretrained encoder)
-and the legacy `mean` for reproducing the old numbers.
+The pipeline transforms each satellite tile into a multichannel input, predicts water probabilities, and converts those probabilities into a binary mask.
 
-## Run it
-
-```bash
-pip install -r requirements.txt
-python app.py                 # http://127.0.0.1:5000  (UI + API)
-python predict.py samples/<tile>.tif --out mask.png --overlay overlay.png
-python test_api.py            # with the server running
+```mermaid
+flowchart TD
+    A["12-band satellite tile"] --> B["Preprocessing and normalization"]
+    B --> C["Calculate 5 spectral indices"]
+    C --> D["17-channel input"]
+    D --> E["U-Net segmentation model"]
+    E --> F["Water probability map"]
+    F --> G["Apply threshold"]
+    G --> H["Binary water mask"]
+    H --> I["Web UI / REST API / PNG output"]
 ```
 
-Environment variables: `PORT`, `HOST`, `WEIGHTS` (checkpoint path), `MAX_UPLOAD_MB` (default 64).
+### Input and output
 
-## API
-
-`POST /predict`: multipart/form-data, field `file` = 12-band `.tif`/`.tiff` (bands first) or `.npy` shaped (12,H,W) / (H,W,12).
-
-| Option | Meaning |
+| Property | Description |
 |---|---|
-| `format=json` (default) | JSON with `mask_png_base64` (0/255), `overlay_png_base64`, `rgb_png_base64`, `probability_png_base64`, `water_fraction`, `water_pixels`, `width`, `height`, `threshold`, `inference_ms` |
-| `format=png` | the binary mask as `image/png` (header `X-Water-Fraction`) |
-| `threshold=0..1` | probability cut-off (default stored in the checkpoint, 0.5) |
-| `tta=1` | average 8 rotations/flips |
-| `include_mask=1` | add the mask as a nested 0/1 list under `mask` |
+| Input | 12-band multispectral satellite imagery |
+| Training tile size | 128 × 128 pixels |
+| Derived features | NDWI, MNDWI, NDVI, AWEInsh, AWEIsh |
+| Model input | 17 channels |
+| Output | Binary water segmentation mask |
+| Mask values | `0` = non-water, `255` = predicted water |
+| Inference framework | PyTorch |
+| Web framework | Flask |
 
-Errors are JSON `{"error": "..."}`: 400 missing file / bad threshold, 413 file too large, 422 unreadable image,
-wrong file type or wrong number of bands. `GET /health` returns the model info, `GET /samples` lists bundled tiles.
+The input dimensions supported by the inference pipeline depend on its preprocessing and model implementation; 128 × 128 pixels is the training tile size.
+
+## 🧠 Model Architecture
+
+The deployed architecture is a U-Net segmentation model. U-Net uses an encoder-decoder structure with skip connections to combine high-level image features with spatial details.
+
+The model receives:
+
+- **12 original spectral bands**
+- **5 derived spectral indices**
+
+These features are combined into a 17-channel tensor. The checkpoint also stores the channel-normalization statistics used during inference.
+
+### Spectral indices
+
+| Index | Purpose |
+|---|---|
+| NDWI | Highlights water using green and near-infrared reflectance |
+| MNDWI | Enhances water detection using green and shortwave-infrared reflectance |
+| NDVI | Helps distinguish vegetation from other land-cover types |
+| AWEInsh | Water-enhancement index designed to reduce shadow interference |
+| AWEIsh | Water-enhancement index designed for shadow-prone conditions |
+
+**Important:** The index calculations assume the input bands are mapped correctly to the required wavelengths. Confirm that the band order and reflectance scaling match the training pipeline before using imagery from a different satellite or dataset.
+
+## 📊 Model Performance and Limitations
+
+The Week 1–2 model comparison reported the following out-of-fold cross-validation results:
+
+| Model configuration | Input channels | IoU | F1 |
+|---|---:|---:|---:|
+| U-Net from scratch + water indices | 17 | 0.7102 | 0.8306 |
+| U-Net with ResNet34, random initialization | 17 | 0.7037 | 0.8261 |
+| U-Net with EfficientNet-B0 pretrained encoder | 17 | 0.7012 | 0.8244 |
+| U-Net with pretrained ResNet34 encoder | 12 | 0.7007 | 0.8240 |
+| U-Net with pretrained ResNet34 encoder | 17 | 0.7005 | 0.8238 |
+| Baseline U-Net from scratch | 12 | 0.6848 | 0.8130 |
+| U-Net with EfficientNet-B0 pretrained encoder | 12 | 0.6590 | 0.7945 |
+
+These figures are results from the earlier model comparison, not a guarantee of the performance of the checkpoint currently deployed in the application. The earlier pretrained-model results also used a first-convolution initialization approach that was subsequently revised.
+
+The updated implementation in `water_seg/models.py` supports multiple first-convolution strategies:
+
+- `rgb_random`: initializes RGB-related filters from pretrained weights and other input-band filters independently.
+- `random`: randomly initializes the first convolution.
+- `adapter`: uses a learnable 1 × 1 convolution to map the multispectral input to three channels before a pretrained encoder.
+- `mean`: retains the legacy initialization strategy for reproducing earlier experiments.
+
+The fixed Week 2 notebook should be used to rerun the comparisons before claiming that the original ranking remains valid.
+
+### Evaluation metrics
+
+- **Intersection over Union (IoU):** Measures the overlap between predicted and reference water pixels.
+- **F1 score / Dice coefficient:** Measures the balance between precision and recall.
+- **Precision:** Indicates how many predicted water pixels are actually water.
+- **Recall:** Indicates how much of the reference water area is detected.
+
+For credible real-world evaluation, use reference masks and a held-out test set containing tiles that were not used for training or model selection. Split data by geographic area or acquisition where possible to reduce spatial leakage.
+
+## 🚀 Getting Started
+
+### 1. Clone the repository
 
 ```bash
-curl -F "file=@samples/tile.tif" http://127.0.0.1:5000/predict
-curl -F "file=@samples/tile.tif" "http://127.0.0.1:5000/predict?format=png" -o mask.png
+git clone https://github.com/nadamohamed-10/Water_segmentation.git
+cd Water_segmentation
 ```
 
-## Tests
+### 2. Create a virtual environment
 
-`python test_api.py` posts every `samples/*.tif` (at least 3 required), checks size, binary values and the PNG
-endpoint, computes IoU/F1 when a `_truth.png` exists, runs 8 edge cases and writes `docs/test_results.md` and
-`docs/results/`. See that file for the latest run.
+**Windows PowerShell**
 
-## Export the real model
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+**Linux / macOS**
 
 ```bash
-# 1) in the notebook, section 11 does this for you; or by hand:
-python train_export.py --data-dir /path/to/data --cv-iou 0.7102 --cv-f1 0.8306
+python -m venv .venv
+source .venv/bin/activate
 ```
-`data/` must contain `images/<id>.tif` and `labels/<id>.png`. The script trains on all tiles with the notebook recipe,
-saves `models/water_unet17.pt` and copies 3 sample tiles (+ ground truth) to `samples/`. The sample tiles were in the
-training set, so IoU/F1 from `test_api.py` on them are optimistic; the CV numbers above are the honest estimate.
 
-## Layout
+### 3. Install dependencies
 
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
-app.py  predict.py  train_export.py  test_api.py
-water_seg/   features.py (indices, normaliser)  models.py (U-Net, first-conv fixes)  inference.py  training.py
-templates/index.html   models/   samples/   docs/   tools/make_synthetic_data.py
+
+### 4. Run the application
+
+```bash
+python app.py
 ```
+
+Open the local web interface:
+
+**http://127.0.0.1:5000**
+
+Upload a supported satellite tile to view the segmentation result.
+
+### 5. Run a prediction from the command line
+
+```bash
+python predict.py samples/<tile>.tif --out mask.png --overlay overlay.png
+```
+
+Replace `<tile>` with an existing GeoTIFF filename in the `samples/` directory.
+
+### 6. Test the API
+
+Start the application in one terminal, then run in another terminal:
+
+```bash
+python test_api.py
+```
+
+The test script checks API responses, output dimensions, binary mask values, PNG output, and supported edge cases. If reference masks are available, it can also calculate IoU and F1.
+
+## 🌐 REST API
+
+### Health check
+
+```http
+GET /health
+```
+
+Returns information about the loaded model and its configuration.
+
+### List bundled samples
+
+```http
+GET /samples
+```
+
+Returns the available sample tiles.
+
+### Predict water segmentation
+
+```http
+POST /predict
+```
+
+Send a `multipart/form-data` request with the image in the `file` field.
+
+#### Supported input formats
+
+| Format | Expected shape |
+|---|---|
+| GeoTIFF | 12 bands, with bands first after reading |
+| NumPy array | `(12, H, W)` or `(H, W, 12)` |
+
+The service accepts `.tif`, `.tiff`, and `.npy` files, subject to the input validation and upload-size limits.
+
+#### Query parameters
+
+| Parameter | Description |
+|---|---|
+| `format=json` | Returns prediction metadata and image outputs as Base64-encoded PNGs |
+| `format=png` | Returns the binary water mask as a PNG |
+| `threshold=0..1` | Probability threshold for converting predictions to a binary mask; default is `0.5` |
+| `tta=1` | Enables eight-way rotation/flip test-time augmentation |
+| `include_mask=1` | Includes the binary mask as a nested 0/1 list in the JSON response |
+
+The actual default threshold is determined by the running implementation and checkpoint configuration. Confirm it in the current code before changing this documentation.
+
+#### Example: JSON prediction
+
+```bash
+curl -X POST \
+  -F "file=@samples/tile.tif" \
+  http://127.0.0.1:5000/predict
+```
+
+#### Example: Save the predicted mask
+
+```bash
+curl -X POST \
+  -F "file=@samples/tile.tif" \
+  "http://127.0.0.1:5000/predict?format=png" \
+  -o mask.png
+```
+
+#### JSON response contents
+
+The JSON response can include:
+
+- `mask_png_base64` — binary water mask
+- `overlay_png_base64` — overlay of the mask on the image
+- `rgb_png_base64` — true-colour preview
+- `probability_png_base64` — visualization of predicted water probabilities
+- `water_fraction` — fraction of pixels predicted as water
+- `water_pixels` — number of pixels predicted as water
+- `width`, `height` — output dimensions
+- `threshold` — threshold applied to the probabilities
+- `inference_ms` — inference time in milliseconds
+
+The response fields depend on the current API implementation.
+
+### Error handling
+
+The API is designed to return JSON error messages for invalid requests, including:
+
+- `400 Bad Request` — missing file or invalid parameter
+- `413 Payload Too Large` — upload exceeds the configured limit
+- `422 Unprocessable Entity` — unsupported or unreadable image, or incorrect band count
+
+## 🧪 Testing and Validation
+
+Run:
+
+```bash
+python test_api.py
+```
+
+The test suite is intended to verify that:
+
+1. Sample tiles can be submitted successfully.
+2. The returned mask has the expected dimensions.
+3. Mask values are binary.
+4. The PNG endpoint returns a valid image.
+5. Invalid inputs are handled correctly.
+6. IoU and F1 are calculated when matching reference masks are available.
+
+The test script also writes reports under `docs/`, including `docs/test_results.md` and output visualizations, according to the current implementation.
+
+**A successful API test does not prove that the model detects real water accurately.** Application tests validate the pipeline; segmentation metrics against reliable ground-truth masks validate predictive performance.
+
+## 🏋️ Export a Model Trained on Real Data
+
+The repository includes a training/export workflow for producing the checkpoint used by the application.
+
+Expected data layout:
+
+```text
+data/
+├── images/
+│   ├── tile_001.tif
+│   ├── tile_002.tif
+│   └── ...
+└── labels/
+    ├── tile_001.png
+    ├── tile_002.png
+    └── ...
+```
+
+Each satellite tile must have a corresponding reference segmentation mask with matching spatial dimensions.
+
+Example:
+
+```bash
+python train_export.py \
+  --data-dir /path/to/data \
+  --cv-iou 0.7102 \
+  --cv-f1 0.8306
+```
+
+The metric arguments above are illustrative: use the actual evaluation results from your training experiment rather than copying the example values. Follow the notebook's current training recipe and confirm its expected arguments before running the script.
+
+The export workflow is intended to save the model to:
+
+```text
+models/water_unet17.pt
+```
+
+It may also copy sample tiles and reference masks into `samples/`.
+
+**Avoid evaluating the final model on tiles that were used for training.** Training-set results are generally optimistic. Reserve independent test tiles for the final evaluation.
+
+## ⚙️ Configuration
+
+The application supports these environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `PORT` | Port used by the web server |
+| `HOST` | Host/interface used by the web server |
+| `WEIGHTS` | Path to the model checkpoint |
+| `MAX_UPLOAD_MB` | Maximum upload size in MB; documented default is 64 |
+
+Example for PowerShell:
+
+```powershell
+$env:MAX_UPLOAD_MB = "64"
+$env:WEIGHTS = "models/water_unet17.pt"
+python app.py
+```
+
+Verify the environment variable names and defaults against the current application code.
+
+## 📁 Project Structure
+
+```text
+Water_segmentation/
+├── app.py                    # Flask web application and REST API
+├── predict.py                # Command-line inference
+├── train_export.py            # Model training and checkpoint export
+├── test_api.py                # API and output validation
+├── water_seg/
+│   ├── features.py             # Spectral indices and normalization
+│   ├── models.py               # U-Net and encoder initialization
+│   ├── inference.py            # Prediction pipeline
+│   └── training.py             # Training utilities
+├── templates/
+│   └── index.html              # Interactive web interface
+├── models/
+│   └── water_unet17.pt         # Model checkpoint
+├── samples/                    # Example satellite tiles
+├── docs/                       # Reports, notebooks, and results
+├── tools/
+│   └── make_synthetic_data.py  # Synthetic demo-data generator
+└── requirements.txt             # Python dependencies
+```
+
+## 🔭 Future Improvements
+
+- Evaluate on independent real-world multispectral satellite imagery.
+- Report test-set IoU, Dice/F1, precision, and recall.
+- Add side-by-side comparison of input imagery, reference masks, and predictions.
+- Test generalization across different locations, seasons, and water conditions.
+- Optimize inference speed and deployment reliability.
+
+## 🛠️ Tech Stack
+
+**Python · PyTorch · U-Net · NumPy · Rasterio · Flask · HTML/CSS/JavaScript · Multispectral Image Processing**
+---
+
+*Built as a water segmentation project exploring multispectral feature engineering, deep-learning-based semantic segmentation, and deployment through a REST API and interactive web application.*
