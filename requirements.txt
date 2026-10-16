@@ -1,0 +1,8 @@
+flask>=3.0
+numpy
+pillow
+rasterio
+torch
+# only needed to train/export Week 2 pretrained-encoder models, not for serving the default U-Net:
+# segmentation-models-pytorch
+# scipy   (tools/make_synthetic_data.py)

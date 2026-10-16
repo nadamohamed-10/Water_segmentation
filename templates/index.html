@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Water mapper</title>
+<style>
+  :root {
+    --paper: #e8eeeb;
+    --panel: #f6f9f7;
+    --ink: #11303a;
+    --muted: #55707a;
+    --line: #c3d1cc;
+    --water: #1f6feb;
+    --water-deep: #0f4db3;
+    --sand: #d9c7a0;
+    --danger: #a8281f;
+    --radius: 6px;
+    font-family: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--paper); color: var(--ink); line-height: 1.5; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 16px 56px; }
+  header { margin-bottom: 28px; max-width: 62ch; }
+  h1 { font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.04; letter-spacing: -0.03em; margin: 0 0 10px; font-weight: 750; }
+  header p { margin: 0; color: var(--muted); font-size: 1.05rem; }
+
+  .layout { display: grid; grid-template-columns: 330px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+  .panel + .panel { margin-top: 16px; }
+  h2 { font-size: 1rem; margin: 0 0 12px; font-weight: 700; }
+
+  .drop { display: block; border: 2px dashed #8fa7a1; border-radius: var(--radius); padding: 26px 14px; text-align: center;
+          cursor: pointer; transition: background .15s, border-color .15s; }
+  .drop:hover, .drop.over, .drop:focus-within { background: #e1ece8; border-color: var(--water); }
+  .drop strong { display: block; font-size: 1.02rem; }
+  .drop span { color: var(--muted); font-size: .9rem; }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .file-name { margin: 10px 0 0; font-size: .9rem; color: var(--muted); overflow-wrap: anywhere; }
+
+  .samples { display: flex; flex-wrap: wrap; gap: 8px; }
+  button { font: inherit; cursor: pointer; }
+  .chip { background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; color: var(--ink); font-size: .88rem; }
+  .chip:hover { border-color: var(--water); }
+  .chip[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  label.row { display: flex; justify-content: space-between; font-weight: 600; font-size: .95rem; }
+  input[type=range] { width: 100%; accent-color: var(--water); margin: 8px 0 2px; }
+  .hint { color: var(--muted); font-size: .85rem; margin: 0 0 14px; }
+  .check { display: flex; gap: 8px; align-items: flex-start; font-size: .92rem; margin-bottom: 16px; }
+  .check input { margin-top: 4px; accent-color: var(--water); }
+
+  .primary { width: 100%; background: var(--water); color: #fff; border: 0; border-radius: var(--radius); padding: 12px 16px; font-weight: 700; font-size: 1rem; }
+  .primary:hover:not(:disabled) { background: var(--water-deep); }
+  .primary:disabled { background: #9db2ad; cursor: not-allowed; }
+  :focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+
+  .msg { margin: 12px 0 0; font-size: .92rem; min-height: 1.4em; }
+  .msg.err { color: var(--danger); font-weight: 600; }
+
+  /* viewer */
+  .viewer-head { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; padding: 6px 14px; font-size: .88rem; color: var(--ink); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+
+  .stage { position: relative; width: 100%; max-width: 640px; margin: 0 auto; background: var(--sand); border-radius: var(--radius); overflow: hidden; touch-action: none; user-select: none; }
+  .stage img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+  .stage .top { position: absolute; inset: 0; clip-path: inset(0 0 0 50%); }
+  .stage .top img { height: 100%; object-fit: fill; }
+  .divider { position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; margin-left: -1.5px; background: #fff; box-shadow: 0 0 0 1px rgba(17,48,58,.35); pointer-events: none; }
+  .divider::after { content: ""; position: absolute; top: 50%; left: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+                    background: #fff; box-shadow: 0 0 0 1px rgba(17,48,58,.35); }
+  .swipe { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
+  .swipe:focus-visible + .divider::after { outline: 3px solid var(--water); outline-offset: 2px; }
+  .tag { position: absolute; bottom: 8px; padding: 2px 9px; font-size: .78rem; font-weight: 600; background: rgba(17,48,58,.78); color: #fff; border-radius: 999px; pointer-events: none; }
+  .tag.l { left: 8px; } .tag.r { right: 8px; }
+
+  .empty { max-width: 640px; margin: 0 auto; aspect-ratio: 1; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--muted);
+           border-radius: var(--radius); background:
+             repeating-linear-gradient(135deg, transparent 0 14px, rgba(31,111,235,.07) 14px 15px), var(--panel); border: 1px dashed var(--line); }
+  .empty p { max-width: 30ch; margin: 0; }
+
+  .stats { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 18px auto 0; max-width: 640px; align-items: baseline; }
+  .share { font-size: 2.6rem; font-weight: 750; letter-spacing: -0.03em; line-height: 1; }
+  .share small { font-size: 1rem; font-weight: 600; color: var(--muted); letter-spacing: 0; margin-left: 6px; }
+  dl { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0; font-size: .9rem; }
+  dl div { display: flex; gap: 6px; } dt { color: var(--muted); } dd { margin: 0; font-weight: 600; }
+  .actions { max-width: 640px; margin: 16px auto 0; display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--ink); background: transparent; border-radius: var(--radius); padding: 8px 14px; font-weight: 600; font-size: .92rem; color: var(--ink); text-decoration: none; }
+  .btn:hover { background: var(--ink); color: #fff; }
+
+  details { font-size: .92rem; }
+  summary { cursor: pointer; font-weight: 700; }
+  pre { background: var(--ink); color: #e8f1ee; padding: 12px; border-radius: var(--radius); overflow-x: auto; font-size: .8rem; margin: 10px 0 0; }
+  footer { margin-top: 28px; color: var(--muted); font-size: .85rem; }
+  .demo { display: inline-block; background: var(--sand); color: var(--ink); padding: 2px 9px; border-radius: 999px; font-weight: 600; margin-left: 6px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Water mapper</h1>
+    <p>Upload a 12-band satellite tile and see which pixels the model calls water. Drag the divider to compare the true-colour image with the result.</p>
+  </header>
+
+  <div class="layout">
+    <div>
+      <section class="panel" aria-labelledby="h-in">
+        <h2 id="h-in">Your tile</h2>
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept=".tif,.tiff,.npy">
+          <strong>Choose a file or drop it here</strong>
+          <span>12-band GeoTIFF (.tif) or a .npy array</span>
+        </label>
+        <p class="file-name" id="fname">No file selected.</p>
+        <div id="sample-wrap" hidden style="margin-top:14px">
+          <p class="hint" style="margin-bottom:8px">Or start with a bundled sample:</p>
+          <div class="samples" id="samples"></div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-set">
+        <h2 id="h-set">Settings</h2>
+        <label class="check"><input type="checkbox" id="tta"><span>Average 8 rotations and flips. Slower, slightly smoother edges.</span></label>
+        <button class="primary" id="run" disabled>Find water</button>
+        <p class="msg" id="msg" role="status" aria-live="polite"></p>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="h-out">
+      <div class="viewer-head">
+        <h2 id="h-out" style="margin:0">Result</h2>
+        <div class="seg" id="layers" role="group" aria-label="Layer shown on the right of the divider" hidden>
+          <button type="button" data-layer="overlay" aria-pressed="true">Water overlay</button>
+          <button type="button" data-layer="mask" aria-pressed="false">Binary mask</button>
+          <button type="button" data-layer="prob" aria-pressed="false">Probability</button>
+        </div>
+      </div>
+
+      <div class="empty" id="empty"><p>No result yet. Choose a tile or a sample, then select Find water.</p></div>
+
+      <div id="result" hidden>
+        <div class="stage" id="stage">
+          <img id="img-rgb" alt="True-colour view of the uploaded tile">
+          <div class="top" id="top"><img id="img-top" alt="Model result"></div>
+          <input class="swipe" id="swipe" type="range" min="0" max="100" value="50" aria-label="Divider position between true-colour image and result">
+          <div class="divider" id="divider"></div>
+          <span class="tag l">True colour</span><span class="tag r" id="top-tag">Water overlay</span>
+        </div>
+        <div class="stats">
+          <div class="share"><span id="share">0</span>%<small>of the tile is water</small></div>
+          <dl>
+            <div><dt>Size</dt><dd id="s-size"></dd></div>
+            <div><dt>Water pixels</dt><dd id="s-px"></dd></div>
+            <div><dt>Threshold</dt><dd id="s-thr"></dd></div>
+            <div><dt>Time</dt><dd id="s-ms"></dd></div>
+          </dl>
+        </div>
+        <div class="actions">
+          <a class="btn" id="dl-mask" download="water_mask.png">Download binary mask</a>
+          <a class="btn" id="dl-overlay" download="water_overlay.png">Download overlay</a>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:20px">
+    <details>
+      <summary>Use the API directly</summary>
+      <pre>curl -F "file=@tile.tif" http://127.0.0.1:5000/predict                    # JSON with base64 PNGs
+curl -F "file=@tile.tif" "http://127.0.0.1:5000/predict?format=png" -o mask.png  # binary mask image (0 / 255)</pre>
+    </details>
+  </section>
+  <footer id="model-info"></footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let file = null, last = null, layer = "overlay";
+
+function setFile(f, label) {
+  file = f; $("fname").textContent = f ? (label || f.name) : "No file selected.";
+  $("run").disabled = !f; $("msg").textContent = ""; $("msg").className = "msg";
+}
+function msg(t, err) { $("msg").textContent = t; $("msg").className = "msg" + (err ? " err" : ""); }
+
+$("file").addEventListener("change", e => { if (e.target.files[0]) { clearSamplePress(); setFile(e.target.files[0]); } });
+const drop = $("drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) { clearSamplePress(); setFile(f); } });
+
+function clearSamplePress() { document.querySelectorAll("#samples .chip").forEach(b => b.setAttribute("aria-pressed", "false")); }
+
+
+
+async function run() {
+  if (!file) return;
+  $("run").disabled = true; msg("Finding water...");
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  fd.append("threshold", "0.5");
+  fd.append("tta", $("tta").checked ? "1" : "0");
+  try {
+    const r = await fetch("/predict", { method: "POST", body: fd });
+    const data = await r.json().catch(() => ({ error: "The server sent an unreadable response." }));
+    if (!r.ok) throw new Error(data.error || `Request failed (${r.status}).`);
+    last = data; show(data); msg("");
+  } catch (e) {
+    msg(e.message || "Could not reach the server. Check that app.py is running.", true);
+  } finally { $("run").disabled = !file; }
+}
+$("run").addEventListener("click", run);
+
+const src = b64 => "data:image/png;base64," + b64;
+function topSrc(d) { return layer === "mask" ? d.mask_png_base64 : layer === "prob" ? d.probability_png_base64 : d.overlay_png_base64; }
+const tagText = { overlay: "Water overlay", mask: "Binary mask", prob: "Probability" };
+
+function show(d) {
+  $("empty").hidden = true; $("result").hidden = false; $("layers").hidden = false;
+  $("img-rgb").src = src(d.rgb_png_base64);
+  $("img-top").src = src(topSrc(d)); $("top-tag").textContent = tagText[layer];
+  $("share").textContent = (d.water_fraction * 100).toFixed(1);
+  $("s-size").textContent = `${d.width} x ${d.height} px`;
+  $("s-px").textContent = d.water_pixels.toLocaleString();
+  $("s-thr").textContent = d.threshold.toFixed(2);
+  $("s-ms").textContent = `${Math.round(d.inference_ms)} ms`;
+  $("dl-mask").href = src(d.mask_png_base64); $("dl-overlay").href = src(d.overlay_png_base64);
+  $("stage").style.aspectRatio = `${d.width} / ${d.height}`;
+}
+document.querySelectorAll("#layers button").forEach(b => b.addEventListener("click", () => {
+  layer = b.dataset.layer;
+  document.querySelectorAll("#layers button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  if (last) { $("img-top").src = src(topSrc(last)); $("top-tag").textContent = tagText[layer]; }
+}));
+
+function setSplit(v) { $("top").style.clipPath = `inset(0 0 0 ${v}%)`; $("divider").style.left = v + "%"; }
+$("swipe").addEventListener("input", e => setSplit(+e.target.value));
+
+// bundled samples + model info
+fetch("/samples").then(r => r.json()).then(({ samples }) => {
+  if (!samples.length) return;
+  $("sample-wrap").hidden = false;
+  samples.forEach(name => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.setAttribute("aria-pressed", "false");
+    b.textContent = name.replace(/\.tiff?$/i, "").replace(/_/g, " ");
+    b.addEventListener("click", async () => {
+      const blob = await (await fetch("/samples/" + encodeURIComponent(name))).blob();
+      clearSamplePress(); b.setAttribute("aria-pressed", "true");
+      setFile(new File([blob], name), name + " (sample)"); run();
+    });
+    $("samples").appendChild(b);
+  });
+}).catch(() => {});
+</script>
+</body>
+</html>
+
+
